@@ -4,10 +4,10 @@ import hashlib
 import subprocess
 import urllib.request
 
+
 def _parse_args(_args, _arg_values, _arg_rules):
     _args_list = []
     for _arg in _args:
-        #print(_arg)
         if isinstance(_arg, dict):
             _rules = _arg.get("rules")
             _allow = True
@@ -49,51 +49,87 @@ def _parse_args(_args, _arg_values, _arg_rules):
     return _args_ret
 
 
-def _download(_url, _libpath, _sha1hash):
+def _trymkdirs(_basepath, _relpath):
+    print(_relpath)
+    _first = os.path.join(_basepath, _relpath[0])
+    if not os.path.exists(_first):
+        os.mkdir(_first)
+
+    if len(_relpath) > 1:
+        _trymkdirs(_first, _relpath[1:])
+
+
+def _download(_url, _basepath, _relpath, _sha1hash):
     print("Downloading from", _url)
-    urllib.request.urlretrieve(_url, _libpath)
+    _trymkdirs(_basepath, os.path.split(_relpath)[0].split("/"))
+    urllib.request.urlretrieve(_url, os.path.join(_basepath, _relpath))
 
     # Check SHA1 hash
     sha1 = hashlib.sha1()
-    with open(_libpath, 'rb') as f:
+    with open(os.path.join(_basepath, _relpath), 'rb') as f:
         while True:
             data = f.read(65536)
             if not data:
                 break
             sha1.update(data)
     if sha1.hexdigest() != _sha1hash:
-        raise Exception("Fatal: Library could not download correctly due to incorrect SHA-1 hash.")
+        raise Exception("Fatal: Could not download correctly due to incorrect SHA-1 hash.")
+
+
+def _check_lib(_basepath, _lib):
+    _sha1hash = _lib['downloads']['artifact']['sha1']
+    if os.path.exists(os.path.join(_basepath, "libraries", _lib['downloads']['artifact']['path'])):
+        sha1 = hashlib.sha1()
+        with open(os.path.join(_basepath, "libraries", _lib['downloads']['artifact']['path']), 'rb') as f:
+            while True:
+                data = f.read(65536)
+                if not data:
+                    break
+                sha1.update(data)
+        if sha1.hexdigest() != _sha1hash:
+            print("SHA-1 hash does not match for",
+                  _lib['downloads']['artifact']['path'] + ". Redownloading...")
+            _download(_lib['downloads']['artifact']['url'], _basepath,
+                      os.path.join("libraries", _lib['downloads']['artifact']['path']), _sha1hash)
+    else:
+        print("Could not find library", _lib['downloads']['artifact']['path'] + ". Downloading...")
+        _download(_lib['downloads']['artifact']['url'], _basepath,
+                  os.path.join("libraries", _lib['downloads']['artifact']['path']), _sha1hash)
 
 
 def _parse_libs(_libs, _arg_values, _arg_rules):
     _classpath = ""
     for _lib in _libs:
-        _libpath = os.path.join(_arg_values['game_directory'], "libraries", _lib['downloads']['artifact']['path'])
-        _sha1hash = _lib['downloads']['artifact']['sha1']
-        if os.path.exists(_libpath):
-            sha1 = hashlib.sha1()
-            with open(_libpath, 'rb') as f:
-                while True:
-                    data = f.read(65536)
-                    if not data:
-                        break
-                    sha1.update(data)
-            if sha1.hexdigest() != _sha1hash:
-                print("SHA-1 hash does not match for", _lib['downloads']['artifact']['path'] + ". Redownloading...")
-                _download(_lib['downloads']['artifact']['url'], _libpath, _sha1hash)
-        else:
-            print("Could not find library", _lib['downloads']['artifact']['path'] + ". Downloading...")
-            _download(_lib['downloads']['artifact']['url'], _libpath, _sha1hash)
-
         _rules = _lib.get("rules")
         if _rules is not None:
             for _rule in _rules:
                 if _rule["action"] == "allow" and _rule["os"]["name"] == _arg_rules["os"]["name"]:
-                    _classpath += _libpath + ";"
+                    _check_lib(_arg_values['game_directory'], _lib)
+                    _classpath += os.path.join(_arg_values['game_directory'], "libraries", _lib['downloads']['artifact']['path']) + ";"
         else:
-            _classpath += _libpath + ";"
+            _check_lib(_arg_values['game_directory'], _lib)
+            _classpath += os.path.join(_arg_values['game_directory'], "libraries", _lib['downloads']['artifact']['path']) + ";"
     _classpath += _arg_values['game_directory'] + f"/versions/{_arg_values['version_name']}/{_arg_values['version_name']}.jar"
     return _classpath
+
+
+def _check_jar(_basepath, _jar, _version):
+    _sha1hash = _jar['sha1']
+    if os.path.exists(os.path.join(_basepath, "versions", _version, _version + ".jar")):
+        sha1 = hashlib.sha1()
+        with open(os.path.join(_basepath, "versions", _version, _version + ".jar"), 'rb') as f:
+            while True:
+                data = f.read(65536)
+                if not data:
+                    break
+                sha1.update(data)
+        if sha1.hexdigest() != _sha1hash:
+            print("SHA-1 hash does not match for",
+                  os.path.join("versions", _version) + ". Redownloading...")
+            _download(_jar['url'], _basepath, os.path.join("versions", _version, _version + ".jar"), _sha1hash)
+    else:
+        print("Could not find library", os.path.join("versions", _version) + ". Downloading...")
+        _download(_jar['url'], _basepath, os.path.join("versions", _version, _version + ".jar"), _sha1hash)
 
 
 def launch(arg_values, jvm_args, rules, wait):
@@ -101,8 +137,12 @@ def launch(arg_values, jvm_args, rules, wait):
     with open(verjson, "r") as j:
         argj = json.load(j)
 
+    _jarpath = os.path.join(arg_values['game_directory'], "versions", arg_values['version_name'], arg_values['version_name'] + ".jar")
+    if not os.path.exists(_jarpath):
+        _check_jar(arg_values['game_directory'], argj["downloads"]["client"], arg_values['version_name'])
+
     sha1 = hashlib.sha1()
-    with open(arg_values['game_directory'] + f"/versions/{arg_values['version_name']}/{arg_values['version_name']}.jar", 'rb') as f:
+    with open(_jarpath, 'rb') as f:
         while True:
             data = f.read(65536)
             if not data:
